@@ -116,6 +116,8 @@ void verifica_verdes(){
         int linha_dir = digitalRead(S_DIR2);
 
         if      ( verde_esq && verde_dir && linha_esq && linha_dir )    estado = RET180;
+        else if ( verde_esq && verde_dir && linha_esq && !linha_dir )   estado = RET180;
+        else if ( verde_esq && verde_dir && !linha_esq && linha_dir )   estado = RET180;
         else if ( verde_esq && linha_esq && !verde_dir )                estado = ESQ90;
         else if ( verde_dir && linha_dir && !verde_esq )                estado = DIR90;
         else                                                            estado = LINHA;
@@ -134,9 +136,9 @@ void linha(){
 
     int sd2 = digitalRead(S_DIR2);
     int sd1 = digitalRead(S_DIR1);
-    int sc =  digitalRead(S_ESQ1);
-    int se1 = digitalRead(S_ESQ2);
-    int se2 = digitalRead(S_CENTRO);
+    int sc =  digitalRead(S_CENTRO);
+    int se1 = digitalRead(S_ESQ1);
+    int se2 = digitalRead(S_ESQ2);
 
     //Cobrir gap: continua em linha reta se não há sensor lido;
     /* Proposta de lógica para corrigir desalinhamento */
