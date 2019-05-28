@@ -4,10 +4,10 @@ Pinos USB:      PA11 e PA12 - Evitar.
 Pinos 5V:		PB10, PB11, PB12, PB13, PB14, PB15, PA8, PA9, PA10, PA11, PA12, PA15, PB3, PB4, PB5, PB6, PB7, PB8, PB9, PB2 (Boot1), PA13 (SWDIO), PA14 (SWCLK)
 Pinos PWM: 		PB1, PB0, PA7, PA6, PA3, PA2, PA1, PA0, PA8, PA9, PA11, PB6, PB7, PB8, PB9
 Pinos TX/RX:	PA2/PA3, PB10/PB11, PA9/PA8, PB6/PB7
-Pinos ADC:      PB1, PB0, PA7, PA6, PA5, PA4, PA3, PA2, PA1, PA0    (todos 3V3 máx)
+Pinos ADC:      xPB1, xPB0, xPA7, xPA6, PA5, PA4, PA3, PA2, PA1, PA0    (todos 3V3 máx)
 */
 
-// Pinos Sensores utilizados para identificar a linha
+// Pinos Sensores utilizados para identificar a linha 
 #define S_ESQ2      PB10
 #define S_ESQ1      PA5
 #define S_CENTRO    PA4
@@ -20,13 +20,14 @@ Pinos ADC:      PB1, PB0, PA7, PA6, PA5, PA4, PA3, PA2, PA1, PA0    (todos 3V3 m
 #define M_RODA_DIR_ANT PB9
 #define M_RODA_ESQ_HOR PA0
 #define M_RODA_ESQ_ANT PA1
-#define M_SERVO1  PB0      // <===========================================    A definir ! ========================================================>
-#define M_SERVO2  PB1      // Suprimir caso se opte por atuador RC Servo.
-// Pinos encoders (requerem timers): https://github.com/chrisalbertson/quadratureBluePill/blob/master/examples/quadratureTest01/quadratureTest01.ino
-#define DT1     PA8
-#define CLK1    PA9
-#define DT2     PA6
-#define CLK2    PA7
+#define M_SERVO1  PB0
+#define M_SERVO2  PB1
+// Pinos encoders (requerem timers). Não devem mais ser necessários.
+// https://github.com/chrisalbertson/quadratureBluePill/blob/master/examples/quadratureTest01/quadratureTest01.ino
+// #define DT1     PA8
+// #define CLK1    PA9
+// #define DT2     PA6
+// #define CLK2    PA7
 // Pinos ultrassom:
 #define TRIG     PB12   //saída
 #define ECHO     PB13   //entrada - precisa ser tolerante a 5V!
@@ -48,29 +49,128 @@ Pinos ADC:      PB1, PB0, PA7, PA6, PA5, PA4, PA3, PA2, PA1, PA0    (todos 3V3 m
 #define RAMPA       6
 //Mais estados a definir posteriormente, para salvamento após a rampa.
 
-int estado = 0;             //estado atual da máquina de estados finitos
-int dist_encruzilhada = 0;  //distância calculada pelo encoder.
+#define VEL_NORMAL 32768 //Velocidade padrão do PWM (até 65535);
+#define TEMPO_90   200   //tempo para girar aprox. 90 graus em ms. Definir experimentalmente;
+#define TEMPO_180  350   //tempo para girar aprox. 180 graus em ms Definir experimentalmente;
+
+int estado = VERIFICA;                //estado atual da máquina de estados finitos
+//int dist_encruzilhada = 0;          //distância calculada pelo encoder.
+
+//Controle PID:
+float erro_atual, erro_anterior;
+float kp = 25, kd = 25;            //constante proporcional, constante derivativa. Ajustar experimentalmente.
+
+float calculaPID(){
+  float p = erro_atual;
+  //float i = i + error;   //componente integral não será usada.
+  float d = erro_atual-erro_anterior;
+  erro_anterior = erro_atual;   //d já calculado, então isso interfere apenas na iteração futura.
+  return (kp*p) /*+ (ki*i)*/ + (kd*d);
+}
+
+// Funções de acesso aos motores:
+
+void corrige_motores(){
+    //usa funções do STM32 em vez de analogWrite para melhorar a resolução do PWM (16 vs 8 bits):
+    pwmWrite(M_RODA_DIR_HOR, VEL_NORMAL + calculaPID()); 
+    pwmWrite(M_RODA_ESQ_HOR, VEL_NORMAL - calculaPID());
+}
+
+void curva_verde(int tipo){
+    if (tipo == RET180 ){
+        for(int i=0 ; i < TEMPO_180 ; i++){
+            pwmWrite(M_RODA_DIR_HOR, VEL_NORMAL); 
+            pwmWrite(M_RODA_ESQ_ANT, VEL_NORMAL);
+            delay(1);
+        }
+    } else if (tipo == ESQ90 ){
+        for(int i=0 ; i < TEMPO_90 ; i++){
+            pwmWrite(M_RODA_DIR_ANT, VEL_NORMAL); 
+            pwmWrite(M_RODA_ESQ_HOR, VEL_NORMAL);
+            delay(1);
+        }
+    } else if (tipo == DIR90 ){
+        for(int i=0 ; i < TEMPO_90 ; i++){
+            pwmWrite(M_RODA_DIR_HOR, VEL_NORMAL); 
+            pwmWrite(M_RODA_ESQ_ANT, VEL_NORMAL);
+            delay(1);
+        }
+    }
+}
+
+// Funções de acesso aos sensores 
 
 int verifica_acc(){
     return 0; //retornam 0 se normal, 1 se entrou na rampa:
 }
 
 int verifica_obst(){
-    return 0; //retornam 0 se normal, 1 se enncontrou caixa
+    //http://stm32duino.com/viewtopic.php?t=106
+    static float dist_obst;
+
+    digitalWrite(TRIG,HIGH);
+    delay(1);
+    digitalWrite(TRIG,LOW);
+
+    dist_obst  = pulseIn(ECHO,HIGH) / 58.138f;
+    if (dist_obst < 10) return 1; else return 0;
 }
 
 void verifica_verdes(){
-    if ( dist_encruzilhada > 100 ) {    //verifica verdes apenas se não acabou de sair de encruzilhada.
-
+//    if ( dist_encruzilhada > 100 ) {    //Não deve ser mais necessário.
         int verde_esq = digitalRead(S_VERDE_ESQ);
         int verde_dir = digitalRead(S_VERDE_DIR);
+        int linha_esq = digitalRead(S_ESQ2);
+        int linha_dir = digitalRead(S_DIR2);
 
-        if      ( verde_esq == 1 && verde_dir == 1 ) estado = RET180;
-        else if ( verde_esq == 1 && verde_dir == 0 ) estado = ESQ90;
-        else if ( verde_esq == 0 && verde_dir == 1 ) estado = DIR90;
-        else    estado = LINHA;
-    } else  estado = LINHA;
+        if      ( verde_esq && verde_dir && linha_esq && linha_dir )    estado = RET180;
+        else if ( verde_esq && verde_dir && linha_esq && !linha_dir )   estado = RET180;
+        else if ( verde_esq && verde_dir && !linha_esq && linha_dir )   estado = RET180;
+        else if ( verde_esq && linha_esq && !verde_dir )                estado = ESQ90;
+        else if ( verde_dir && linha_dir && !verde_esq )                estado = DIR90;
+        else                                                            estado = LINHA;
+//    } else  estado = LINHA;
 }
+
+void linha(){
+    // Primeiro garantir que ignorará encruzilhada
+    while ( digitalRead(S_ESQ2) && digitalRead(S_DIR2) ){
+        //Continua em linha reta até terminar encruzilhada. 
+        //Releia sensores a cada iteração do loop.
+        //dist_encruzilhada = 0; //Não deve ser mais necessário.
+        erro_atual = 0; //avance em linha reta.
+        corrige_motores();
+    }
+
+    int sd2 = digitalRead(S_DIR2);
+    int sd1 = digitalRead(S_DIR1);
+    int sc =  digitalRead(S_CENTRO);
+    int se1 = digitalRead(S_ESQ1);
+    int se2 = digitalRead(S_ESQ2);
+
+    //Cobrir gap: continua em linha reta se não há sensor lido;
+    /* Proposta de lógica para corrigir desalinhamento */
+    // Usar PID? Sugestão para controle via PID, menos compacta que a versão apresentada aqui: 
+    // https://www.instructables.com/id/Line-Follower-Robot-PID-Control-Android-Setup/
+    if      ( se2 && !se1 && !sc && !sd1 && !sd2) erro_atual = -4; //10000
+    else if ( se2 &&  se1 && !sc && !sd1 && !sd2) erro_atual = -3; //11000
+    else if (!se2 &&  se1 && !sc && !sd1 && !sd2) erro_atual = -2; //01000
+    else if (!se2 &&  se1 &&  sc && !sd1 && !sd2) erro_atual = -1; //01100
+    else if (!se2 && !se1 &&  sc && !sd1 && !sd2) erro_atual =  0; //00100
+    else if (!se2 && !se1 &&  sc &&  sd1 && !sd2) erro_atual =  1; //00110
+    else if (!se2 && !se1 && !sc &&  sd1 && !sd2) erro_atual =  2; //00010
+    else if (!se2 && !se1 && !sc &&  sd1 &&  sd2) erro_atual =  3; //00011
+    else if (!se2 && !se1 && !sc && !sd1 &&  sd2) erro_atual =  4; //00001
+    else erro_atual =  0; //sem linha ou leitura anormal, continue para frente
+    //if (!se2 && !se1 && !sc && !sd1 && !sd2) erro_atual = 0;   //sem linha, continue para frente. Movido acima
+    corrige_motores();
+}
+
+void contorna_obst(){
+    /* Inserir lógica de contorno de obstáculo aqui*/
+}
+
+// Geral
 
 void setup() {
     pinMode(S_DIR1,     INPUT);
@@ -86,7 +186,7 @@ void setup() {
     pinMode(M_SERVO1,    OUTPUT);
     pinMode(M_SERVO2,    OUTPUT);
     
-    pinMode(TRIG, INPUT);
+    pinMode(TRIG, OUTPUT);
     pinMode(ECHO, INPUT);
 
     pinMode(PC13, OUTPUT);  //LED integrado
@@ -96,31 +196,27 @@ void setup() {
 void loop() {
     switch (estado){
         case VERIFICA:
-            if          (verifica_acc())  estado = RAMPA;
-            else if     (verifica_obst()) estado = CONTORNA;
-            else        verifica_verdes();
+            if      (verifica_acc())  estado = RAMPA;
+            else if (verifica_obst()) estado = CONTORNA;
+            else    verifica_verdes();
             break;
         case LINHA:
-            /* incluir aqui lógica para corrigir desalinhamento*/
-
-            while ( digitalRead(S_ESQ2) && digitalRead(S_DIR2) ){
-                //Reseta trajeto lido pelo encoder e continua em linha reta até terminar encruzilhada
-                dist_encruzilhada = 0;
-                analogWrite(M_RODA_DIR_HOR, 128);
-                analogWrite(M_RODA_DIR_HOR, 128);
-            };
+            linha();
             estado = VERIFICA; break;
         case ESQ90:
-            
+            curva_verde(ESQ90);
             estado = VERIFICA; break;
         case DIR90:
-            
+            curva_verde(DIR90);
             estado = VERIFICA; break;
         case RET180:
-            
+            curva_verde(RET180);
             estado = VERIFICA; break;
+        case CONTORNA:
+            contorna_obst();
+            break;
         case RAMPA:
-            
+            /* Daqui pra frente, fodeu */
             break;
     }
 }
